@@ -97,7 +97,7 @@ def render_grid(size: int, grid: Grid):
                 (x, y),
                 # bkg=((0,0,0),(255,255,255))[(x+y)%2]
             )
-    im.save('sierpinski_capet.png')
+    im.save('sierpinski_carpet.png')
 
 def main(rank: int):
     size = 3**rank + 1
