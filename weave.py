@@ -1,41 +1,22 @@
-from enum import Enum, auto
-from functools import cache
 from sys import stderr
-from typing import Any, Generator, List, Literal, Tuple
+from typing import Iterator
+from typing import List
+from typing import Optional
+from typing import Tuple
+
+from palette import Colour
+from palette import PALLETE
+from rules import Crossing
+from rules import RULES
+from thread import THREAD_GENS
+from thread import Thread
+
 try:
     from PIL import Image, ImageDraw
 except ImportError:
     Image = False
 
 CELL_STRIDE = 5
-
-class Thread(Enum):
-    RED = 0
-    GRN = auto()
-    BLU = auto()
-    YEL = auto()
-
-class Crossing(Enum):
-    WARP = 0
-    WEFT = auto()
-
-Colour = Tuple[int, int, int]
-
-palette1 = (
-    (255,   0,   0),
-    (  0, 255,   0),
-    (  0,   0, 255),
-    (255, 255,   0),
-)
-
-palette2 = (
-    (214, 126, 195),
-    ( 24, 185, 196),
-    (128,  65, 196),
-    (128, 196,  65),
-)
-
-PALLETE = palette2
 
 COLOURS: dict[Thread, Colour] = {
     Thread.RED: PALLETE[0],
@@ -47,67 +28,6 @@ COLOURS: dict[Thread, Colour] = {
 Cell = Tuple[Thread, Thread, Thread, Thread]
 Grid = List[List[Cell]]
 
-def start_threads() -> Generator[Literal[Thread.RED, Thread.GRN], Any, None]:
-    yield Thread.GRN
-    while True:
-        yield Thread.RED
-
-@cache
-def next_crossing_knot(up: Thread, left: Thread, cross: Crossing) -> Tuple[Thread, Thread, Thread, Thread]:
-    """Knot 3-colour: No change if both threads the same colour else thee under thread is changed to the third colour if"""
-    if up == left:
-        return (up, left, up, left)
-    new = ({Thread.RED, Thread.GRN, Thread.BLU} - {up, left}).pop()
-    if cross is Crossing.WARP:
-        return (up, left, new, left)
-    else:
-        return (up, left, up, new)
-
-@cache
-def next_crossing_xor(up: Thread, left: Thread, cross: Crossing) -> Tuple[Thread, Thread, Thread, Thread]:
-    """2-colour: Under thread is flipped if over is green"""
-    if cross is Crossing.WARP:
-        if left is Thread.RED:
-            return (up, left, up, left)
-        down = ({Thread.RED, Thread.GRN} - {up}).pop()
-        return (up, left, down, left)
-    else:
-        if up is Thread.RED:
-            return (up, left, up, left)
-        right = ({Thread.RED, Thread.GRN} - {left}).pop()
-        return (up, left, up, right)
-
-@cache
-def next_crossing_mod3(up: Thread, left: Thread, cross: Crossing) -> Tuple[Thread, Thread, Thread, Thread]:
-    """3-colour: Sum the enumeration of the top and left and mod 3 it, under thread is changed to this colour
-
-    This rotates the colour of the under thread by the enum value of the over thread. The mod 3 means we lose
-    information so the rule does not work in th opposite direction. However. It still produces the sierpinski
-    pattern and the padding threads are more distinctive.
-    """
-    out = Thread((up.value + left.value) % 3)
-    if cross is Crossing.WARP:
-        return (up, left, out, left)
-    else:
-        return (up, left, up, out)
-
-@cache
-def next_crossing_sub_mod3(up: Thread, left: Thread, cross: Crossing) -> Tuple[Thread, Thread, Thread, Thread]:
-    """3-colour: Sub the enumeration of the under from the over and mod 3 it, under thread is changed to this colour
-    """
-    if cross is Crossing.WARP:
-        out = Thread((left.value - up.value) % 3)
-        return (up, left, out, left)
-    else:
-        out = Thread((up.value - left.value) % 3)
-        return (up, left, up, out)
-
-RULES = {
-    'knot': next_crossing_knot,
-    'xor': next_crossing_xor,
-    'mod3': next_crossing_mod3,
-    'smod3': next_crossing_sub_mod3,
-}
 
 def print_grid(grid: Grid):
     for row in grid:
@@ -117,6 +37,7 @@ def print_grid(grid: Grid):
             else:
                 print('+', end='')
         print('')
+
 
 def render_cell(draw: ImageDraw, cell: Cell, coords: Tuple[int,int], bkg: Colour=(0,0,0)):
     cross = (Crossing.WARP, Crossing.WEFT)[sum(coords)%2]
@@ -150,13 +71,22 @@ def render_grid(size: int, grid: Grid, filename: str='sierpinski_carpet.png'):
             )
     im.save(filename)
 
-def main(rank: int, rule: str='knot', filename: str='sierpinski_carpet.png'):
+
+def main(
+    rank:           int,
+    rule:           str=                                                    'knot',
+    start_threads:  Tuple[str,str]=                                         ('g-r..', 'g-r..'),
+    thread_gens:    Optional[Tuple[Iterator[Thread], Iterator[Thread]]]=    None,
+    filename:       str=                                                    'sierpinski_carpet.png'
+):
 
     next_crossing = RULES[rule]
-
     size = 3**rank + 1
-    start_ys = start_threads()
-    start_xs = start_threads()
+
+    if thread_gens is None:
+        start_ys, start_xs = tuple(THREAD_GENS[s]() for s in start_threads)
+    else:
+        start_ys, start_xs = thread_gens
 
     grid: Grid = [[(Thread.RED, Thread.RED, Thread.RED, Thread.RED) for _ in range(size)] for _ in range(size)]
 
@@ -170,8 +100,10 @@ def main(rank: int, rule: str='knot', filename: str='sierpinski_carpet.png'):
     # print_grid(grid)
     render_grid(size, grid, filename=filename)
 
+
 if __name__ == '__main__':
     main(5, rule='knot', filename='rank_5_knot.png')
     main(5, rule='xor', filename='rank_5_xor.png')
     main(5, rule='mod3', filename='rank_5_mod3.png')
     main(5, rule='smod3', filename='rank_5_smod3.png')
+    main(5, rule='knot', start_threads=('b-g-r', 'r-g-b'), filename='rank_5_knot_bgr_rgb.png')
