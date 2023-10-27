@@ -1,6 +1,8 @@
 from enum import Enum
 from enum import auto
 from functools import cache
+from typing import Callable
+from typing import Dict
 from typing import Tuple
 
 from thread import Thread
@@ -9,6 +11,9 @@ from thread import Thread
 class Crossing(Enum):
     WARP = 0
     WEFT = auto()
+
+
+RuleFunc = Callable[[Thread, Thread, Crossing], Tuple[Thread, Thread, Thread, Thread]]
 
 
 @cache
@@ -65,9 +70,9 @@ def next_crossing_sub_mod3(up: Thread, left: Thread, cross: Crossing) -> Tuple[T
         return (up, left, up, out)
 
 
-RULES = {
-    'knot': next_crossing_knot,
-    'xor': next_crossing_xor,
-    'mod3': next_crossing_mod3,
-    'smod3': next_crossing_sub_mod3,
+RULES: Dict[str, Tuple[RuleFunc, int]] = {
+    'knot': (next_crossing_knot, 3),
+    'xor': (next_crossing_xor, 2),
+    'mod3': (next_crossing_mod3, 3),
+    'smod3': (next_crossing_sub_mod3, 3),
 }

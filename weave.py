@@ -1,12 +1,15 @@
+from functools import cache
 from sys import stderr
+from typing import Any
 from typing import Iterator
 from typing import List
 from typing import Optional
 from typing import Tuple
 
-from palette import Colour
-from palette import PALLETE
+from palette import Colour, Palette
+from palette import PALETTE
 from rules import Crossing
+from rules import RuleFunc
 from rules import RULES
 from thread import THREAD_GENS
 from thread import Thread
@@ -18,58 +21,67 @@ except ImportError:
 
 CELL_STRIDE = 5
 
-COLOURS: dict[Thread, Colour] = {
-    Thread.RED: PALLETE[0],
-    Thread.GRN: PALLETE[1],
-    Thread.BLU: PALLETE[2],
-    Thread.YEL: PALLETE[3],
-}
 
 Cell = Tuple[Thread, Thread, Thread, Thread]
 Grid = List[List[Cell]]
 
 
-def print_grid(grid: Grid):
-    for row in grid:
-        for cell in row:
-            if Thread.RED == cell[0] == cell[2] or Thread.RED == cell[1] == cell[3]:
-                print(' ', end='')
-            else:
-                print('+', end='')
-        print('')
+@cache
+def get_tile_image(cell: Cell, cross: Crossing, bkg: Colour=(0,0,0), palette: Palette=PALETTE) -> Image:
+    im = Image.new(mode="RGB", size=(CELL_STRIDE, CELL_STRIDE))
+    draw = ImageDraw.Draw(im)
+    sta_x = sta_y = 0
+    end_x = end_y = CELL_STRIDE
+    ctr_x = ctr_y = CELL_STRIDE//2
+    draw.rectangle( ((sta_x, sta_y), (end_x, end_y)), fill=bkg)
+    if cross is Crossing.WARP:
+        draw.rectangle( ((ctr_x,   sta_y),   (ctr_x+1, ctr_y-2)), fill=palette[cell[0].value])
+        draw.rectangle( ((ctr_x,   ctr_y+3), (ctr_x+1, end_y)),   fill=palette[cell[2].value])
+        draw.rectangle( ((sta_x,   ctr_y),   (end_x,   ctr_y+1)), fill=palette[cell[1].value])
+    else:
+        draw.rectangle( ((sta_x,   ctr_y),   (ctr_x-2, ctr_y+1)), fill=palette[cell[1].value])
+        draw.rectangle( ((ctr_x+3, ctr_y),   (end_x,   ctr_y+1)), fill=palette[cell[3].value])
+        draw.rectangle( ((ctr_x,   sta_y),   (ctr_x+1, end_y)),   fill=palette[cell[0].value])
+    return im
 
 
-def render_cell(draw: ImageDraw, cell: Cell, coords: Tuple[int,int], bkg: Colour=(0,0,0)):
+def render_cell(im: Image, cell: Cell, coords: Tuple[int,int], bkg: Colour=(0,0,0), palette: Palette=PALETTE):
     cross = (Crossing.WARP, Crossing.WEFT)[sum(coords)%2]
     start = tuple(val * CELL_STRIDE for val in coords)
-    end = tuple(val + CELL_STRIDE for val in start)
-    draw.rectangle( (start, end), fill=bkg)
-    ctr = tuple((s+e)//2 for s, e in zip(start, end))
-    if cross is Crossing.WARP:
-        draw.rectangle( ((ctr[0], start[1]), (ctr[0]+1, ctr[1]-2)), fill=COLOURS[cell[0]])
-        draw.rectangle( ((ctr[0], ctr[1]+3), (ctr[0]+1, end[1])), fill=COLOURS[cell[2]])
-        draw.rectangle( ((start[0], ctr[1]), (end[0], ctr[1]+1)), fill=COLOURS[cell[1]])
-    else:
-        draw.rectangle( ((start[0], ctr[1]), (ctr[0]-2, ctr[1]+1)), fill=COLOURS[cell[1]])
-        draw.rectangle( ((ctr[0]+3, ctr[1]), (end[0], ctr[1]+1)), fill=COLOURS[cell[3]])
-        draw.rectangle( ((ctr[0], start[1]), (ctr[0]+1, end[1])), fill=COLOURS[cell[0]])
+    tile_im = get_tile_image(cell, cross, bkg, palette)
+    im.paste(tile_im, start)
 
 
-def render_grid(size: int, grid: Grid, filename: str='sierpinski_carpet.png'):
+def render_grid(size: int, grid: Grid, palette: Palette=PALETTE, filename: str='sierpinski_carpet.png'):
     if not Image:
         print("Dependency 'pillow' is not installed", file=stderr)
         return
     im_size = size*CELL_STRIDE
     im = Image.new(mode="RGB", size=(im_size, im_size))
-    im_draw = ImageDraw.Draw(im)
     for y, row in enumerate(grid):
         for x, cell in enumerate(row):
             render_cell(
-                im_draw,
+                im,
                 cell,
-                (x, y)
+                (x, y),
+                palette=palette
             )
     im.save(filename)
+
+
+def make_grid(h: int, w: int, fill: Any) -> Grid:
+    return [[fill for _ in range(w)] for _ in range(h)]
+
+
+def weave(grid: Grid, thread_gens: Tuple[Iterator[Thread], Iterator[Thread]], rule: RuleFunc) -> Grid:
+    start_ys, start_xs = thread_gens
+    for y, row in enumerate(grid):
+        for x, _ in enumerate(row):
+            up = next(start_xs) if y == 0 else grid[y-1][x][2]
+            left = next(start_ys) if x == 0 else grid[y][x-1][3]
+            cross = (Crossing.WARP, Crossing.WEFT)[(x+y)%2]
+            grid[y][x] = rule(up, left, cross)
+    return grid
 
 
 def main(
@@ -80,24 +92,16 @@ def main(
     filename:       str=                                                    'sierpinski_carpet.png'
 ):
 
-    next_crossing = RULES[rule]
+    next_crossing, _ = RULES[rule]
     size = 3**rank + 1
 
     if thread_gens is None:
-        start_ys, start_xs = tuple(THREAD_GENS[s]() for s in start_threads)
-    else:
-        start_ys, start_xs = thread_gens
+        thread_gens = tuple(THREAD_GENS[s]() for s in start_threads)
 
-    grid: Grid = [[(Thread.RED, Thread.RED, Thread.RED, Thread.RED) for _ in range(size)] for _ in range(size)]
+    grid = make_grid(size, size, (Thread.RED, Thread.RED, Thread.RED, Thread.RED))
 
-    for y in range(size):
-        for x in range(size):
-            up = next(start_xs) if y == 0 else grid[y-1][x][2]
-            left = next(start_ys) if x == 0 else grid[y][x-1][3]
-            cross = (Crossing.WARP, Crossing.WEFT)[(x+y)%2]
-            grid[y][x] = next_crossing(up, left, cross)
+    grid = weave(grid, thread_gens, next_crossing)
 
-    # print_grid(grid)
     render_grid(size, grid, filename=filename)
 
 
