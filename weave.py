@@ -1,6 +1,6 @@
 from functools import cache
 from sys import stderr
-from typing import Any
+from typing import Any, Sequence
 from typing import Iterator
 from typing import List
 from typing import Optional
@@ -34,6 +34,7 @@ def get_tile_image(cell: Cell, cross: Crossing, bkg: Colour=(0,0,0), palette: Pa
     end_x = end_y = CELL_STRIDE
     ctr_x = ctr_y = CELL_STRIDE//2
     draw.rectangle( ((sta_x, sta_y), (end_x, end_y)), fill=bkg)
+    print(cell)
     if cross is Crossing.WARP:
         draw.rectangle( ((ctr_x,   sta_y),   (ctr_x+1, ctr_y-2)), fill=palette[cell[0].value])
         draw.rectangle( ((ctr_x,   ctr_y+3), (ctr_x+1, end_y)),   fill=palette[cell[2].value])
@@ -73,6 +74,64 @@ def make_grid(h: int, w: int, fill: Any) -> Grid:
     return [[fill for _ in range(w)] for _ in range(h)]
 
 
+@cache
+def weave2(thread_seqs: Tuple[Sequence[Cell],Sequence[Cell]], cross: Crossing, rule: RuleFunc) -> Grid:
+    start_ys, start_xs = thread_seqs
+    y_len, x_len = len(start_ys), len(start_xs)
+    if y_len == x_len == 0:
+        return []
+    if y_len == x_len == 1:
+        return [[rule(start_ys[0][3], start_xs[0][2], cross)]]
+    y_split, x_split = y_len // 2, x_len // 2
+    r = Thread.RED
+    ul = weave2(
+        (
+            tuple((r,r,r,t[3]) for t in start_ys[:y_split]),
+            tuple((r,r,t[2],r) for t in start_xs[:x_split]),
+        ),
+        cross,
+        rule
+    )
+    ur = weave2(
+        (
+            tuple((r,r,r,t[3]) for t in tuple(row[-1] for row in ul if len(row) > 0)),
+            tuple((r,r,t[2],r) for t in start_xs[x_split:]),
+        ),
+        Crossing((cross.value + x_split) % 2),
+        rule
+    )
+    bl = weave2(
+        (
+            tuple((r,r,r,t[3]) for t in start_ys[y_split:]),
+            tuple((r,r,t[2],r) for t in tuple((ul[-1] if len(ul) > 0 else []))),
+        ),
+        Crossing((cross.value + y_split) % 2),
+        rule
+    )
+    br = weave2(
+        (
+            tuple((r,r,r,t[3]) for t in tuple(row[-1] for row in bl if len(row) > 0)),
+            tuple((r,r,t[2],r) for t in tuple((ul[-1] if len(ur) > 0 else []))),
+        ),
+        Crossing((cross.value + y_split + x_split) % 2),
+        rule
+    )
+    quads = (
+        (ul, ur),
+        (bl, br),
+    )
+    return [
+        [
+            quads[y//y_split][x//x_split][y%y_split][x%x_split]
+            for x
+            in range(x_len)
+        ]
+        for y
+        in range(y_len)
+    ]
+
+
+
 def weave(grid: Grid, thread_gens: Tuple[Iterator[Thread], Iterator[Thread]], rule: RuleFunc) -> Grid:
     start_ys, start_xs = thread_gens
     for y, row in enumerate(grid):
@@ -100,7 +159,17 @@ def main(
 
     grid = make_grid(size, size, (Thread.RED, Thread.RED, Thread.RED, Thread.RED))
 
-    grid = weave(grid, thread_gens, next_crossing)
+    # grid = weave(grid, thread_gens, next_crossing)
+    
+    r = Thread.RED
+    grid = weave2(
+        (
+            tuple((r,r,r,next(thread_gens[0])) for _ in range(size)),
+            tuple((r,r,next(thread_gens[1]),r) for _ in range(size))
+        ),
+        Crossing(0),
+        next_crossing
+    )
 
     render_grid(size, grid, filename=filename)
 
